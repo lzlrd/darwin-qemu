@@ -1,0 +1,69 @@
+#! /usr/bin/env bash
+
+case "$@" in
+	"recovery")
+		BOOTRECOV=true
+		;;
+	*)
+		BOOTRECOV=false
+		;;
+esac
+
+if [ "$EUID" -ne 0 ]; then
+	COMMAND="sudo qemu-system-x86_64"
+else
+	COMMAND="qemu-system-x86_64"
+fi
+
+CORERATIO=(12 2 3 2)
+
+CPUFEATS="+fpu,+vme,+de,+pse,+tsc,+msr,+pae,+mce,+cx8,+apic,+sep,+mtrr,+pge,+mca,+cmov,+pat,+pse36,+clflush,+mmx,+fxsr,+sse,+sse2,+ss,+ht,+syscall,+nx,+pdpe1gb,+rdtscp,+lm,+pni,+pclmulqdq,+ssse3,+fma,+cx16,+pcid,+sse4_1,+sse4_2,+x2apic,+movbe,+popcnt,+aes,+xsave,+avx,+f16c,+rdrand,+hypervisor,+lahf_lm,+abm,+3dnowprefetch,+ssbd,+ibpb,+stibp,+fsgsbase,+bmi1,+avx2,+smep,+bmi2,+erms,+invpcid,+rdseed,+adx,+smap,+clflushopt,+xsaveopt,+xsavec,+xgetbv1,+xsaves"
+
+if zgrep -q "CONFIG_IO_URING=y" "/proc/config.gz"; then
+	DRIVEAIO="aio=io_uring"
+else
+	DRIVEAIO="aio=native,cache.direct=on"
+fi
+
+MEMORY="4G"
+
+PARAMS=(
+	-cpu Penryn,vendor="GenuineIntel",vmware-cpuid-freq=on,$CPUFEATS \
+	-enable-kvm \
+	-device ich9-ahci,id=sata \
+	-device ich9-intel-hda -device hda-duplex \
+	-device isa-applesmc,osk="ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc" \
+	-device usb-kbd \
+	-device usb-tablet \
+	-device qxl-vga,vgamem_mb=128,vram_size_mb=256,vram64_size_mb=1024 \
+	-device virtio-blk-pci,drive=esp,ioeventfd=true,num-queues=12 \
+)
+if [ "$BOOTRECOV" = true ]; then
+PARAMS+=(
+	-device virtio-blk-pci,drive=install,ioeventfd=true,num-queues=12 \
+)
+fi
+PARAMS+=(
+	-device virtio-blk-pci,drive=system,ioeventfd=true,num-queues=12 \
+	-device virtio-net-pci,gso=true,ioeventfd=true,mac=28:F0:76:06:B2:C0,mq=true,netdev=net0 \
+)
+if [ "$BOOTRECOV" = true ]; then
+PARAMS+=(
+	-drive $DRIVEAIO,format=raw,file="lib/BaseSystem.img",id=install,if=none \
+)
+fi
+PARAMS+=(
+	-drive $DRIVEAIO,format=raw,file="lib/OpenCore-nopicker.img",id=esp,if=none \
+	-drive $DRIVEAIO,format=raw,file="lib/MyDisk.img",id=system,if=none \
+	-drive $DRIVEAIO,format=raw,file="lib/OVMF_CODE.fd",if=pflash,readonly \
+	-drive $DRIVEAIO,format=raw,file="lib/OVMF_VARS-1280x720.fd",if=pflash \
+	-m $MEMORY \
+	-machine q35,accel=kvm \
+	-netdev user,id=net0 \
+	-smbios type=2 \
+	-smp ${CORERATIO[0]},cores=${CORERATIO[1]},sockets=${CORERATIO[2]},threads=${CORERATIO[3]},maxcpus=${CORERATIO[0]} \
+	-usb \
+	-vga none \
+)
+
+$COMMAND ${PARAMS[@]}
